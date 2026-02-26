@@ -825,10 +825,16 @@ export type InsufficientFundsInfo = {
   walletAddress: string;
 };
 
+/**
+ * Wallet config: either a plain EVM private key string, or the full
+ * resolution object from resolveOrGenerateWalletKey() which may include
+ * Solana keys. Using the full object prevents callers from accidentally
+ * forgetting to forward Solana key bytes.
+ */
+export type WalletConfig = string | { key: string; solanaPrivateKeyBytes?: Uint8Array };
+
 export type ProxyOptions = {
-  walletKey: string;
-  /** Optional 32-byte Solana private key for Solana x402 payments. */
-  solanaPrivateKeyBytes?: Uint8Array;
+  wallet: WalletConfig;
   apiBase?: string;
   /** Port to listen on (default: 8402) */
   port?: number;
@@ -1092,6 +1098,11 @@ async function uploadDataUriToHost(dataUri: string): Promise<string> {
  * Returns a handle with the assigned port, base URL, and a close function.
  */
 export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
+  // Normalize wallet config: string = EVM-only, object = full resolution
+  const walletKey = typeof options.wallet === "string" ? options.wallet : options.wallet.key;
+  const solanaPrivateKeyBytes =
+    typeof options.wallet === "string" ? undefined : options.wallet.solanaPrivateKeyBytes;
+
   const apiBase = options.apiBase ?? BLOCKRUN_API;
 
   // Determine port: options.port > env var > default
@@ -1101,7 +1112,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
   const existingWallet = await checkExistingProxy(listenPort);
   if (existingWallet) {
     // Proxy already running — reuse it instead of failing with EADDRINUSE
-    const account = privateKeyToAccount(options.walletKey as `0x${string}`);
+    const account = privateKeyToAccount(walletKey as `0x${string}`);
     const balanceMonitor = new BalanceMonitor(account.address);
     const baseUrl = `http://127.0.0.1:${listenPort}`;
 
@@ -1126,7 +1137,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
   }
 
   // Create x402 payment client with EVM scheme (always available)
-  const account = privateKeyToAccount(options.walletKey as `0x${string}`);
+  const account = privateKeyToAccount(walletKey as `0x${string}`);
   const evmPublicClient = createPublicClient({ chain: base, transport: http() });
   const evmSigner = toClientEvmSigner(account, evmPublicClient);
   const x402 = new x402Client();
@@ -1137,10 +1148,10 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
   //   - solana:* wildcard (catches any CAIP-2 Solana network)
   //   - V1 compat names: "solana", "solana-devnet", "solana-testnet"
   let solanaAddress: string | undefined;
-  if (options.solanaPrivateKeyBytes) {
+  if (solanaPrivateKeyBytes) {
     const { registerExactSvmScheme } = await import("@x402/svm/exact/client");
     const { createKeyPairSignerFromPrivateKeyBytes } = await import("@solana/kit");
-    const solanaSigner = await createKeyPairSignerFromPrivateKeyBytes(options.solanaPrivateKeyBytes);
+    const solanaSigner = await createKeyPairSignerFromPrivateKeyBytes(solanaPrivateKeyBytes);
     solanaAddress = solanaSigner.address;
     registerExactSvmScheme(x402, { signer: solanaSigner });
     console.log(`[ClawRouter] Solana x402 scheme registered: ${solanaAddress}`);
