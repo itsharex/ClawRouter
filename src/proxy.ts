@@ -275,7 +275,7 @@ export function getProxyPort(): number {
  * Check if a proxy is already running on the given port.
  * Returns the wallet address if running, undefined otherwise.
  */
-async function checkExistingProxy(port: number): Promise<string | undefined> {
+async function checkExistingProxy(port: number): Promise<{ wallet: string; paymentChain?: string } | undefined> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), HEALTH_CHECK_TIMEOUT_MS);
 
@@ -286,9 +286,9 @@ async function checkExistingProxy(port: number): Promise<string | undefined> {
     clearTimeout(timeoutId);
 
     if (response.ok) {
-      const data = (await response.json()) as { status?: string; wallet?: string };
+      const data = (await response.json()) as { status?: string; wallet?: string; paymentChain?: string };
       if (data.status === "ok" && data.wallet) {
-        return data.wallet;
+        return { wallet: data.wallet, paymentChain: data.paymentChain };
       }
     }
     return undefined;
@@ -1124,17 +1124,25 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
   const listenPort = options.port ?? getProxyPort();
 
   // Check if a proxy is already running on this port
-  const existingWallet = await checkExistingProxy(listenPort);
-  if (existingWallet) {
+  const existingProxy = await checkExistingProxy(listenPort);
+  if (existingProxy) {
     // Proxy already running — reuse it instead of failing with EADDRINUSE
     const account = privateKeyToAccount(walletKey as `0x${string}`);
     const balanceMonitor = new BalanceMonitor(account.address);
     const baseUrl = `http://127.0.0.1:${listenPort}`;
 
     // Verify the existing proxy is using the same wallet (or warn if different)
-    if (existingWallet !== account.address) {
+    if (existingProxy.wallet !== account.address) {
       console.warn(
-        `[ClawRouter] Existing proxy on port ${listenPort} uses wallet ${existingWallet}, but current config uses ${account.address}. Reusing existing proxy.`,
+        `[ClawRouter] Existing proxy on port ${listenPort} uses wallet ${existingProxy.wallet}, but current config uses ${account.address}. Reusing existing proxy.`,
+      );
+    }
+
+    // Verify the existing proxy is using the same payment chain
+    if (existingProxy.paymentChain && existingProxy.paymentChain !== paymentChain) {
+      throw new Error(
+        `Existing proxy on port ${listenPort} is using ${existingProxy.paymentChain} but ${paymentChain} was requested. ` +
+        `Stop the existing proxy first or use a different port.`,
       );
     }
 
@@ -1151,7 +1159,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
     return {
       port: listenPort,
       baseUrl,
-      walletAddress: existingWallet,
+      walletAddress: existingProxy.wallet,
       solanaAddress: reuseSolanaAddress,
       balanceMonitor,
       close: async () => {
@@ -1252,6 +1260,7 @@ export async function startProxy(options: ProxyOptions): Promise<ProxyHandle> {
       const response: Record<string, unknown> = {
         status: "ok",
         wallet: account.address,
+        paymentChain,
       };
 
       if (full) {

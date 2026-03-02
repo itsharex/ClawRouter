@@ -274,7 +274,10 @@ export async function resolveOrGenerateWalletKey(options?: {
     // Note: env-var users need a saved wallet.key for setupSolana(), so we skip if not present
     if (!mnemonic && wantSolana) {
       console.log(`[ClawRouter] Solana payment chain selected — setting up Solana wallet...`);
-      // Save the env key to disk first so setupSolana() can find it
+      // Save the env key to disk first so setupSolana() can find it.
+      // WARNING: This persists the env-provided key to disk, which changes the security model
+      // for users who expect keys to live only in environment variables.
+      console.warn(`[ClawRouter] ⚠ Writing wallet key to ${WALLET_FILE} (required for Solana key derivation)`);
       await mkdir(WALLET_DIR, { recursive: true });
       await writeFile(WALLET_FILE, envKey + "\n", { mode: 0o600 });
       const solanaResult = await setupSolana();
