@@ -79,6 +79,11 @@ export const MODEL_ALIASES: Record<string, string> = {
   // MiniMax
   minimax: "minimax/minimax-m2.5",
 
+  // Z.AI GLM-5
+  glm: "zai/glm-5",
+  "glm-5": "zai/glm-5",
+  "glm-5-turbo": "zai/glm-5-turbo",
+
   // Routing profile aliases (common variations)
   "auto-router": "auto",
   router: "auto",
@@ -671,6 +676,28 @@ export const BLOCKRUN_MODELS: BlockRunModel[] = [
     outputPrice: 2.5,
     contextWindow: 262144,
     maxOutput: 16384,
+    toolCalling: true,
+  },
+
+  // Z.AI GLM-5 Models
+  {
+    id: "zai/glm-5",
+    name: "GLM-5",
+    version: "5",
+    inputPrice: 1.0,
+    outputPrice: 3.2,
+    contextWindow: 200000,
+    maxOutput: 128000,
+    toolCalling: true,
+  },
+  {
+    id: "zai/glm-5-turbo",
+    name: "GLM-5 Turbo",
+    version: "5-turbo",
+    inputPrice: 1.2,
+    outputPrice: 4.0,
+    contextWindow: 200000,
+    maxOutput: 128000,
     toolCalling: true,
   },
 ];
