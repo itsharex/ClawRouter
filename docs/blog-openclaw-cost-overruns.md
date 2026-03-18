@@ -151,6 +151,8 @@ There is no monthly invoice. There is no 3am email. There is a wallet balance, a
 
 ## OpenClaw + ClawRouter: The Full Picture
 
+![Architecting for production safety — OpenClaw standalone vs OpenClaw + ClawRouter comparison across cost, context, error handling, and budgeting](assets/blockrun-clawrouter-vs-openclaw-standalone-comparison-production-safety.png)
+
 | Problem | OpenClaw alone | OpenClaw + ClawRouter |
 |---------|---------------|----------------------|
 | Heartbeat cost overrun | No per-run cap | Tier routing → 50–500× cheaper model |
