@@ -248,6 +248,10 @@ USDC stays in your wallet until spent — non-custodial. Price is visible in the
 /chain solana        # Alias for /wallet solana
 /stats               # View usage and savings
 /stats clear         # Reset usage statistics
+/exclude             # Show excluded models
+/exclude add <model> # Block a model from routing (aliases work: "grok-4", "free")
+/exclude remove <model> # Unblock a model
+/exclude clear       # Remove all exclusions
 ```
 
 **Fund your wallet:**
@@ -288,6 +292,21 @@ For basic usage, no configuration needed. For advanced options:
 | `CLAWROUTER_SOLANA_RPC_URL` | `https://api.mainnet-beta.solana.com` | Solana RPC endpoint     |
 
 **Full reference:** [docs/configuration.md](docs/configuration.md)
+
+### Model Exclusion
+
+Block specific models from being routed to. Useful if a model doesn't follow your agent instructions or you want to control costs.
+
+```bash
+/exclude add nvidia/gpt-oss-120b   # Block the free model
+/exclude add grok-4                # Aliases work — blocks all grok-4 variants
+/exclude add gpt-5.4               # Skip expensive models
+/exclude                           # Show current exclusions
+/exclude remove grok-4             # Unblock a model
+/exclude clear                     # Remove all exclusions
+```
+
+Exclusions persist across restarts (`~/.openclaw/blockrun/exclude-models.json`). If all models in a tier are excluded, the safety net ignores the filter so routing never breaks.
 
 ---
 
