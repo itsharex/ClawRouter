@@ -681,22 +681,6 @@ export function detectDegradedSuccessResponse(body: string): string | undefined 
 }
 
 /**
- * HTTP status codes that indicate provider issues worth retrying with fallback.
- */
-const FALLBACK_STATUS_CODES = [
-  400, // Bad request - sometimes used for billing errors
-  401, // Unauthorized - provider API key issues
-  402, // Payment required - but from upstream, not x402
-  403, // Forbidden - provider restrictions
-  413, // Payload too large - request exceeds model's context limit
-  429, // Rate limited
-  500, // Internal server error
-  502, // Bad gateway
-  503, // Service unavailable
-  504, // Gateway timeout
-];
-
-/**
  * Valid message roles for OpenAI-compatible APIs.
  * Some clients send non-standard roles (e.g., "developer" instead of "system").
  */
