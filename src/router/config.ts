@@ -1051,7 +1051,7 @@ export const DEFAULT_ROUTING_CONFIG: RoutingConfig = {
         "google/gemini-2.5-flash-lite", // 1,353ms, $0.10/$0.40
         "openai/gpt-5.4-nano", // $0.20/$1.25, 1M context
         "xai/grok-4-fast-non-reasoning", // 1,143ms, $0.20/$0.50 — fast fallback
-        "nvidia/gpt-oss-120b", // 1,252ms, FREE fallback
+        "free/gpt-oss-120b", // 1,252ms, FREE fallback
       ],
     },
     MEDIUM: {
@@ -1093,9 +1093,9 @@ export const DEFAULT_ROUTING_CONFIG: RoutingConfig = {
   // Eco tier configs - absolute cheapest (blockrun/eco)
   ecoTiers: {
     SIMPLE: {
-      primary: "nvidia/gpt-oss-120b", // FREE! $0.00/$0.00
+      primary: "free/gpt-oss-120b", // FREE! $0.00/$0.00
       fallback: [
-        "nvidia/gpt-oss-20b", // FREE — smaller, faster
+        "free/gpt-oss-20b", // FREE — smaller, faster
         "google/gemini-3.1-flash-lite", // $0.25/$1.50 — newest flash-lite
         "openai/gpt-5.4-nano", // $0.20/$1.25 — fast nano
         "google/gemini-2.5-flash-lite", // $0.10/$0.40

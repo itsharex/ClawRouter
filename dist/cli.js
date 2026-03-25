@@ -40214,7 +40214,7 @@ var DEFAULT_ROUTING_CONFIG = {
         // $0.20/$1.25, 1M context
         "xai/grok-4-fast-non-reasoning",
         // 1,143ms, $0.20/$0.50 — fast fallback
-        "nvidia/gpt-oss-120b"
+        "free/gpt-oss-120b"
         // 1,252ms, FREE fallback
       ]
     },
@@ -40278,10 +40278,10 @@ var DEFAULT_ROUTING_CONFIG = {
   // Eco tier configs - absolute cheapest (blockrun/eco)
   ecoTiers: {
     SIMPLE: {
-      primary: "nvidia/gpt-oss-120b",
+      primary: "free/gpt-oss-120b",
       // FREE! $0.00/$0.00
       fallback: [
-        "nvidia/gpt-oss-20b",
+        "free/gpt-oss-20b",
         // FREE — smaller, faster
         "google/gemini-3.1-flash-lite",
         // $0.25/$1.50 — newest flash-lite
@@ -40511,27 +40511,38 @@ var MODEL_ALIASES = {
   // delisted 2026-03-12
   "xai/grok-3-fast": "xai/grok-4-fast-reasoning",
   // delisted (too expensive)
-  // NVIDIA — existing alias kept for backward compat
-  nvidia: "nvidia/gpt-oss-120b",
-  "gpt-120b": "nvidia/gpt-oss-120b",
-  "gpt-20b": "nvidia/gpt-oss-20b",
-  // Free model aliases — "-free" suffix for models with paid twins
-  "deepseek-free": "nvidia/deepseek-v3.2",
-  "mistral-free": "nvidia/mistral-large-3-675b",
-  "glm-free": "nvidia/glm-4.7",
-  "llama-free": "nvidia/llama-4-maverick",
-  // Bare-name aliases for unique free models
-  nemotron: "nvidia/nemotron-ultra-253b",
-  "nemotron-ultra": "nvidia/nemotron-ultra-253b",
-  "nemotron-253b": "nvidia/nemotron-ultra-253b",
-  "nemotron-super": "nvidia/nemotron-super-49b",
-  "nemotron-49b": "nvidia/nemotron-super-49b",
-  "nemotron-120b": "nvidia/nemotron-3-super-120b",
-  devstral: "nvidia/devstral-2-123b",
-  "devstral-2": "nvidia/devstral-2-123b",
-  "qwen-coder": "nvidia/qwen3-coder-480b",
-  "qwen-coder-free": "nvidia/qwen3-coder-480b",
-  maverick: "nvidia/llama-4-maverick",
+  // NVIDIA — backward compat aliases (nvidia/xxx → free/xxx)
+  nvidia: "free/gpt-oss-120b",
+  "gpt-120b": "free/gpt-oss-120b",
+  "gpt-20b": "free/gpt-oss-20b",
+  "nvidia/gpt-oss-120b": "free/gpt-oss-120b",
+  "nvidia/gpt-oss-20b": "free/gpt-oss-20b",
+  "nvidia/nemotron-ultra-253b": "free/nemotron-ultra-253b",
+  "nvidia/nemotron-3-super-120b": "free/nemotron-3-super-120b",
+  "nvidia/nemotron-super-49b": "free/nemotron-super-49b",
+  "nvidia/deepseek-v3.2": "free/deepseek-v3.2",
+  "nvidia/mistral-large-3-675b": "free/mistral-large-3-675b",
+  "nvidia/qwen3-coder-480b": "free/qwen3-coder-480b",
+  "nvidia/devstral-2-123b": "free/devstral-2-123b",
+  "nvidia/glm-4.7": "free/glm-4.7",
+  "nvidia/llama-4-maverick": "free/llama-4-maverick",
+  // Free model shorthand aliases
+  "deepseek-free": "free/deepseek-v3.2",
+  "mistral-free": "free/mistral-large-3-675b",
+  "glm-free": "free/glm-4.7",
+  "llama-free": "free/llama-4-maverick",
+  nemotron: "free/nemotron-ultra-253b",
+  "nemotron-ultra": "free/nemotron-ultra-253b",
+  "nemotron-253b": "free/nemotron-ultra-253b",
+  "nemotron-super": "free/nemotron-super-49b",
+  "nemotron-49b": "free/nemotron-super-49b",
+  "nemotron-120b": "free/nemotron-3-super-120b",
+  devstral: "free/devstral-2-123b",
+  "devstral-2": "free/devstral-2-123b",
+  "qwen-coder": "free/qwen3-coder-480b",
+  "qwen-coder-free": "free/qwen3-coder-480b",
+  maverick: "free/llama-4-maverick",
+  free: "free/nemotron-ultra-253b",
   // MiniMax
   minimax: "minimax/minimax-m2.7",
   "minimax-m2.7": "minimax/minimax-m2.7",
@@ -40540,8 +40551,6 @@ var MODEL_ALIASES = {
   glm: "zai/glm-5",
   "glm-5": "zai/glm-5",
   "glm-5-turbo": "zai/glm-5-turbo",
-  // Free alias — points to strongest free model
-  free: "nvidia/nemotron-ultra-253b",
   // Routing profile aliases (common variations)
   "auto-router": "auto",
   router: "auto"
@@ -41081,11 +41090,12 @@ var BLOCKRUN_MODELS = [
     agentic: true,
     toolCalling: true
   },
-  // NVIDIA - Free models (hosted by NVIDIA, billingMode: "free" on server)
-  // toolCalling intentionally omitted on all free models: structured function
-  // calling support unverified. Excluded from tool-heavy routing paths.
+  // Free models (hosted by NVIDIA, billingMode: "free" on server)
+  // IDs use "free/" prefix so users see them as free in the /model picker.
+  // ClawRouter maps free/xxx → nvidia/xxx before sending to BlockRun upstream.
+  // toolCalling intentionally omitted: structured function calling unverified.
   {
-    id: "nvidia/gpt-oss-120b",
+    id: "free/gpt-oss-120b",
     name: "[Free] GPT-OSS 120B",
     version: "120b",
     inputPrice: 0,
@@ -41094,7 +41104,7 @@ var BLOCKRUN_MODELS = [
     maxOutput: 16384
   },
   {
-    id: "nvidia/gpt-oss-20b",
+    id: "free/gpt-oss-20b",
     name: "[Free] GPT-OSS 20B",
     version: "20b",
     inputPrice: 0,
@@ -41103,7 +41113,7 @@ var BLOCKRUN_MODELS = [
     maxOutput: 16384
   },
   {
-    id: "nvidia/nemotron-ultra-253b",
+    id: "free/nemotron-ultra-253b",
     name: "[Free] Nemotron Ultra 253B",
     version: "253b",
     inputPrice: 0,
@@ -41113,7 +41123,7 @@ var BLOCKRUN_MODELS = [
     reasoning: true
   },
   {
-    id: "nvidia/nemotron-3-super-120b",
+    id: "free/nemotron-3-super-120b",
     name: "[Free] Nemotron 3 Super 120B",
     version: "3-super-120b",
     inputPrice: 0,
@@ -41123,7 +41133,7 @@ var BLOCKRUN_MODELS = [
     reasoning: true
   },
   {
-    id: "nvidia/nemotron-super-49b",
+    id: "free/nemotron-super-49b",
     name: "[Free] Nemotron Super 49B",
     version: "super-49b",
     inputPrice: 0,
@@ -41133,7 +41143,7 @@ var BLOCKRUN_MODELS = [
     reasoning: true
   },
   {
-    id: "nvidia/deepseek-v3.2",
+    id: "free/deepseek-v3.2",
     name: "[Free] DeepSeek V3.2",
     version: "v3.2",
     inputPrice: 0,
@@ -41143,7 +41153,7 @@ var BLOCKRUN_MODELS = [
     reasoning: true
   },
   {
-    id: "nvidia/mistral-large-3-675b",
+    id: "free/mistral-large-3-675b",
     name: "[Free] Mistral Large 675B",
     version: "3-675b",
     inputPrice: 0,
@@ -41153,7 +41163,7 @@ var BLOCKRUN_MODELS = [
     reasoning: true
   },
   {
-    id: "nvidia/qwen3-coder-480b",
+    id: "free/qwen3-coder-480b",
     name: "[Free] Qwen3 Coder 480B",
     version: "480b",
     inputPrice: 0,
@@ -41162,7 +41172,7 @@ var BLOCKRUN_MODELS = [
     maxOutput: 16384
   },
   {
-    id: "nvidia/devstral-2-123b",
+    id: "free/devstral-2-123b",
     name: "[Free] Devstral 2 123B",
     version: "2-123b",
     inputPrice: 0,
@@ -41171,7 +41181,7 @@ var BLOCKRUN_MODELS = [
     maxOutput: 16384
   },
   {
-    id: "nvidia/glm-4.7",
+    id: "free/glm-4.7",
     name: "[Free] GLM-4.7",
     version: "4.7",
     inputPrice: 0,
@@ -41181,7 +41191,7 @@ var BLOCKRUN_MODELS = [
     reasoning: true
   },
   {
-    id: "nvidia/llama-4-maverick",
+    id: "free/llama-4-maverick",
     name: "[Free] Llama 4 Maverick",
     version: "4-maverick",
     inputPrice: 0,
@@ -46764,20 +46774,26 @@ var ROUTING_PROFILES = /* @__PURE__ */ new Set([
   "blockrun/premium",
   "premium"
 ]);
-var FREE_MODEL = "nvidia/gpt-oss-120b";
+var FREE_MODEL = "free/gpt-oss-120b";
 var FREE_MODELS = /* @__PURE__ */ new Set([
-  "nvidia/gpt-oss-120b",
-  "nvidia/gpt-oss-20b",
-  "nvidia/nemotron-ultra-253b",
-  "nvidia/nemotron-3-super-120b",
-  "nvidia/nemotron-super-49b",
-  "nvidia/deepseek-v3.2",
-  "nvidia/mistral-large-3-675b",
-  "nvidia/qwen3-coder-480b",
-  "nvidia/devstral-2-123b",
-  "nvidia/glm-4.7",
-  "nvidia/llama-4-maverick"
+  "free/gpt-oss-120b",
+  "free/gpt-oss-20b",
+  "free/nemotron-ultra-253b",
+  "free/nemotron-3-super-120b",
+  "free/nemotron-super-49b",
+  "free/deepseek-v3.2",
+  "free/mistral-large-3-675b",
+  "free/qwen3-coder-480b",
+  "free/devstral-2-123b",
+  "free/glm-4.7",
+  "free/llama-4-maverick"
 ]);
+function toUpstreamModelId(modelId) {
+  if (modelId.startsWith("free/")) {
+    return "nvidia/" + modelId.slice("free/".length);
+  }
+  return modelId;
+}
 var MAX_MESSAGES = 200;
 var CONTEXT_LIMIT_KB = 5120;
 var HEARTBEAT_INTERVAL_MS = 2e3;
@@ -48139,7 +48155,7 @@ async function tryModelRequest(upstreamUrl, method, headers, body, modelId, maxT
   let requestBody = body;
   try {
     const parsed = JSON.parse(body.toString());
-    parsed.model = modelId;
+    parsed.model = toUpstreamModelId(modelId);
     if (Array.isArray(parsed.messages)) {
       parsed.messages = normalizeMessageRoles(parsed.messages);
     }
@@ -48909,6 +48925,9 @@ async function proxyRequest(req, res, apiBase, payFetch, options, routerOpts, de
         effectiveSessionId = deriveSessionId(parsedMessages);
       }
       if (bodyModified) {
+        if (parsed.model && typeof parsed.model === "string") {
+          parsed.model = toUpstreamModelId(parsed.model);
+        }
         body = Buffer.from(JSON.stringify(parsed));
       }
     } catch (err) {
@@ -49013,7 +49032,7 @@ async function proxyRequest(req, res, apiBase, payFetch, options, routerOpts, de
         modelId = FREE_MODEL;
         isFreeModel = true;
         const parsed = JSON.parse(body.toString());
-        parsed.model = FREE_MODEL;
+        parsed.model = toUpstreamModelId(FREE_MODEL);
         body = Buffer.from(JSON.stringify(parsed));
         balanceFallbackNotice = sufficiency.info.isEmpty ? `> **\u26A0\uFE0F Wallet empty** \u2014 using free model. Fund your wallet to use ${originalModel}.
 

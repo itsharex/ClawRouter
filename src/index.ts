@@ -371,18 +371,18 @@ function injectModelsConfig(logger: { info: (msg: string) => void }): void {
     "moonshot/kimi-k2.5",
     "xai/grok-3",
     "minimax/minimax-m2.5",
-    // Free NVIDIA models
-    "nvidia/gpt-oss-120b",
-    "nvidia/gpt-oss-20b",
-    "nvidia/nemotron-ultra-253b",
-    "nvidia/deepseek-v3.2",
-    "nvidia/mistral-large-3-675b",
-    "nvidia/qwen3-coder-480b",
-    "nvidia/devstral-2-123b",
-    "nvidia/llama-4-maverick",
-    "nvidia/nemotron-3-super-120b",
-    "nvidia/nemotron-super-49b",
-    "nvidia/glm-4.7",
+    // Free models (free/ prefix so users see "free" in picker)
+    "free/gpt-oss-120b",
+    "free/gpt-oss-20b",
+    "free/nemotron-ultra-253b",
+    "free/deepseek-v3.2",
+    "free/mistral-large-3-675b",
+    "free/qwen3-coder-480b",
+    "free/devstral-2-123b",
+    "free/llama-4-maverick",
+    "free/nemotron-3-super-120b",
+    "free/nemotron-super-49b",
+    "free/glm-4.7",
   ];
   if (!defaults.models || typeof defaults.models !== "object" || Array.isArray(defaults.models)) {
     defaults.models = {};

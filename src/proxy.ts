@@ -105,20 +105,31 @@ const ROUTING_PROFILES = new Set([
   "blockrun/premium",
   "premium",
 ]);
-const FREE_MODEL = "nvidia/gpt-oss-120b"; // Last-resort single free model fallback
+const FREE_MODEL = "free/gpt-oss-120b"; // Last-resort single free model fallback
 const FREE_MODELS = new Set([
-  "nvidia/gpt-oss-120b",
-  "nvidia/gpt-oss-20b",
-  "nvidia/nemotron-ultra-253b",
-  "nvidia/nemotron-3-super-120b",
-  "nvidia/nemotron-super-49b",
-  "nvidia/deepseek-v3.2",
-  "nvidia/mistral-large-3-675b",
-  "nvidia/qwen3-coder-480b",
-  "nvidia/devstral-2-123b",
-  "nvidia/glm-4.7",
-  "nvidia/llama-4-maverick",
+  "free/gpt-oss-120b",
+  "free/gpt-oss-20b",
+  "free/nemotron-ultra-253b",
+  "free/nemotron-3-super-120b",
+  "free/nemotron-super-49b",
+  "free/deepseek-v3.2",
+  "free/mistral-large-3-675b",
+  "free/qwen3-coder-480b",
+  "free/devstral-2-123b",
+  "free/glm-4.7",
+  "free/llama-4-maverick",
 ]);
+/**
+ * Map free/xxx model IDs to nvidia/xxx for upstream BlockRun API.
+ * The "free/" prefix is a ClawRouter convention for the /model picker;
+ * BlockRun server expects "nvidia/" prefix.
+ */
+function toUpstreamModelId(modelId: string): string {
+  if (modelId.startsWith("free/")) {
+    return "nvidia/" + modelId.slice("free/".length);
+  }
+  return modelId;
+}
 const MAX_MESSAGES = 200; // BlockRun API limit - truncate older messages if exceeded
 const CONTEXT_LIMIT_KB = 5120; // Server-side limit: 5MB in KB
 const HEARTBEAT_INTERVAL_MS = 2_000;
@@ -2293,7 +2304,7 @@ async function tryModelRequest(
   let requestBody = body;
   try {
     const parsed = JSON.parse(body.toString()) as Record<string, unknown>;
-    parsed.model = modelId;
+    parsed.model = toUpstreamModelId(modelId);
 
     // Normalize message roles (e.g., "developer" -> "system")
     if (Array.isArray(parsed.messages)) {
@@ -3295,8 +3306,11 @@ async function proxyRequest(
         effectiveSessionId = deriveSessionId(parsedMessages);
       }
 
-      // Rebuild body if modified
+      // Rebuild body if modified — map free/xxx → nvidia/xxx for upstream
       if (bodyModified) {
+        if (parsed.model && typeof parsed.model === "string") {
+          parsed.model = toUpstreamModelId(parsed.model);
+        }
         body = Buffer.from(JSON.stringify(parsed));
       }
     } catch (err) {
@@ -3433,9 +3447,9 @@ async function proxyRequest(
         );
         modelId = FREE_MODEL;
         isFreeModel = true; // keep in sync — budget logic gates on !isFreeModel
-        // Update the body with new model
+        // Update the body with new model (map free/ → nvidia/ for upstream)
         const parsed = JSON.parse(body.toString()) as Record<string, unknown>;
-        parsed.model = FREE_MODEL;
+        parsed.model = toUpstreamModelId(FREE_MODEL);
         body = Buffer.from(JSON.stringify(parsed));
 
         // Set notice to prepend to response so user knows about the fallback
