@@ -104,14 +104,14 @@ Your wallet address is printed on first run. Send a few USDC on Base or Solana �
 <details>
 <summary><strong>continue.dev</strong> — <code>~/.continue/config.yaml</code></summary>
 
-> **Important:** Use `provider: openai` (not `provider: clawrouter`). The native `clawrouter` provider uses a different API path that is not compatible with the local proxy.
+> **Important:** `apiBase` must end with `/v1/` (including the trailing slash). Without it, continue.dev constructs the URL as `/chat/completions` instead of `/v1/chat/completions`, and the proxy returns 404.
 
 ```yaml
 models:
   - name: ClawRouter Auto
     provider: openai
     model: blockrun/auto
-    apiBase: http://localhost:8402
+    apiBase: http://localhost:8402/v1/
     apiKey: x402
     roles:
       - chat
@@ -120,6 +120,8 @@ models:
 ```
 
 To pin a specific model, replace `blockrun/auto` with any model from [blockrun.ai/models](https://blockrun.ai/models), e.g. `anthropic/claude-opus-4.6`, `xai/grok-4-0709`.
+
+Both `provider: openai` and `provider: clawrouter` work — just make sure `apiBase` ends with `/v1/`.
 
 <details>
 <summary>Legacy JSON format (<code>~/.continue/config.json</code>)</summary>
@@ -131,7 +133,7 @@ To pin a specific model, replace `blockrun/auto` with any model from [blockrun.a
       "title": "ClawRouter Auto",
       "provider": "openai",
       "model": "blockrun/auto",
-      "apiBase": "http://localhost:8402",
+      "apiBase": "http://localhost:8402/v1/",
       "apiKey": "x402"
     }
   ]
