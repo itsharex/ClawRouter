@@ -631,11 +631,15 @@ else
 fi
 
 echo ""
-echo "  Commands:"
+echo "  OpenClaw slash commands:"
+echo "    /blockrun          → wallet balance, address, chain"
+echo "    /blockrun export   → export private key for backup"
+echo "    /blockrun solana   → switch to Solana payments"
+echo "    /stats             → usage & cost breakdown"
+echo ""
+echo "  CLI commands:"
 echo "    npx @blockrun/clawrouter report            # daily usage report"
 echo "    npx @blockrun/clawrouter report weekly      # weekly report"
 echo "    npx @blockrun/clawrouter report monthly     # monthly report"
 echo "    npx @blockrun/clawrouter doctor             # AI diagnostics"
-echo ""
-echo "  ⚠  Back up your wallet key: /blockrun export  (in OpenClaw)"
 echo ""
