@@ -81236,69 +81236,71 @@ var plugin = {
       return;
     }
     const proc = process;
-    if (proc.__clawrouterRegistered) return;
+    const alreadyRegistered = !!proc.__clawrouterRegistered;
     proc.__clawrouterRegistered = true;
-    api.registerProvider(blockrunProvider);
-    api.registerImageGenerationProvider(buildImageGenerationProvider());
-    api.registerMusicGenerationProvider(buildMusicGenerationProvider());
-    injectModelsConfig(api.logger);
-    injectAuthProfile(api.logger);
-    const runtimePort = getProxyPort();
-    if (!api.config.models) {
-      api.config.models = { providers: {} };
-    }
-    if (!api.config.models.providers) {
-      api.config.models.providers = {};
-    }
-    api.config.models.providers.blockrun = {
-      baseUrl: `http://127.0.0.1:${runtimePort}/v1`,
-      api: "openai-completions",
-      // apiKey is required by pi-coding-agent's ModelRegistry for providers with models.
-      apiKey: "x402-proxy-handles-auth",
-      models: OPENCLAW_MODELS
-    };
-    api.logger.info("BlockRun provider registered (55+ models via x402)");
-    try {
-      const proxyBaseUrl = `http://127.0.0.1:${runtimePort}`;
-      const partnerTools = buildPartnerTools(proxyBaseUrl);
-      for (const tool of partnerTools) {
-        api.registerTool(tool);
+    if (!alreadyRegistered) {
+      api.registerProvider(blockrunProvider);
+      api.registerImageGenerationProvider(buildImageGenerationProvider());
+      api.registerMusicGenerationProvider(buildMusicGenerationProvider());
+      injectModelsConfig(api.logger);
+      injectAuthProfile(api.logger);
+      const runtimePort = getProxyPort();
+      if (!api.config.models) {
+        api.config.models = { providers: {} };
       }
-      if (partnerTools.length > 0) {
-        api.logger.info(
-          `Registered ${partnerTools.length} partner tool(s): ${partnerTools.map((t) => t.name).join(", ")}`
+      if (!api.config.models.providers) {
+        api.config.models.providers = {};
+      }
+      api.config.models.providers.blockrun = {
+        baseUrl: `http://127.0.0.1:${runtimePort}/v1`,
+        api: "openai-completions",
+        // apiKey is required by pi-coding-agent's ModelRegistry for providers with models.
+        apiKey: "x402-proxy-handles-auth",
+        models: OPENCLAW_MODELS
+      };
+      api.logger.info("BlockRun provider registered (55+ models via x402)");
+      try {
+        const proxyBaseUrl = `http://127.0.0.1:${runtimePort}`;
+        const partnerTools = buildPartnerTools(proxyBaseUrl);
+        for (const tool of partnerTools) {
+          api.registerTool(tool);
+        }
+        if (partnerTools.length > 0) {
+          api.logger.info(
+            `Registered ${partnerTools.length} partner tool(s): ${partnerTools.map((t) => t.name).join(", ")}`
+          );
+        }
+      } catch (err) {
+        api.logger.warn(
+          `Failed to register partner tools: ${err instanceof Error ? err.message : String(err)}`
         );
       }
-      api.registerCommand({
-        name: "partners",
-        description: "List available partner APIs and pricing",
-        acceptsArgs: false,
-        requireAuth: false,
-        handler: async () => {
-          if (PARTNER_SERVICES.length === 0) {
-            return { text: "No partner APIs available." };
-          }
-          const lines = ["**Partner APIs** (paid via your ClawRouter wallet)", ""];
-          for (const svc of PARTNER_SERVICES) {
-            lines.push(`**${svc.name}** (${svc.partner})`);
-            lines.push(`  ${svc.description}`);
-            lines.push(`  Tool: \`${`blockrun_${svc.id}`}\``);
-            lines.push(
-              `  Pricing: ${svc.pricing.perUnit} per ${svc.pricing.unit} (min ${svc.pricing.minimum}, max ${svc.pricing.maximum})`
-            );
-            lines.push(
-              `  **How to use:** Ask "Look up Twitter user @elonmusk" or "Get info on these X accounts: @naval, @balajis"`
-            );
-            lines.push("");
-          }
-          return { text: lines.join("\n") };
-        }
-      });
-    } catch (err) {
-      api.logger.warn(
-        `Failed to register partner tools: ${err instanceof Error ? err.message : String(err)}`
-      );
     }
+    api.registerCommand({
+      name: "partners",
+      description: "List available partner APIs and pricing",
+      acceptsArgs: false,
+      requireAuth: false,
+      handler: async () => {
+        if (PARTNER_SERVICES.length === 0) {
+          return { text: "No partner APIs available." };
+        }
+        const lines = ["**Partner APIs** (paid via your ClawRouter wallet)", ""];
+        for (const svc of PARTNER_SERVICES) {
+          lines.push(`**${svc.name}** (${svc.partner})`);
+          lines.push(`  ${svc.description}`);
+          lines.push(`  Tool: \`${`blockrun_${svc.id}`}\``);
+          lines.push(
+            `  Pricing: ${svc.pricing.perUnit} per ${svc.pricing.unit} (min ${svc.pricing.minimum}, max ${svc.pricing.maximum})`
+          );
+          lines.push(
+            `  **How to use:** Ask "Look up Twitter user @elonmusk" or "Get info on these X accounts: @naval, @balajis"`
+          );
+          lines.push("");
+        }
+        return { text: lines.join("\n") };
+      }
+    });
     api.registerCommand(createWalletCommand(api));
     try {
       const blockrunAlias = createWalletCommand(api);
@@ -81309,6 +81311,7 @@ var plugin = {
     api.registerCommand(createStatsCommand());
     api.registerCommand(createExcludeCommand());
     api.logger.info("Commands registered: /wallet, /blockrun, /stats, /exclude");
+    if (alreadyRegistered) return;
     api.registerService({
       id: "clawrouter-proxy",
       start: () => {
@@ -81353,7 +81356,7 @@ var plugin = {
     }
     startProxyInBackground(api).then(async () => {
       const port = getProxyPort();
-      const healthy = await waitForProxyHealth(port, 5e3);
+      const healthy = await waitForProxyHealth(port, 15e3);
       if (!healthy) {
         api.logger.warn(`Proxy health check timed out, commands may not work immediately`);
       }

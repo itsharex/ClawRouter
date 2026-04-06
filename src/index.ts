@@ -1309,97 +1309,100 @@ const plugin: OpenClawPluginDefinition = {
       return;
     }
 
-    // Guard against repeated register() calls within the same process.
-    // OpenClaw v2026.4.5 parallel plugin loading (and 'openclaw onboard') can
-    // invoke register() many times per second.
-    // IMPORTANT: guard is placed AFTER the completion-mode short-circuit so that a
-    // completion-mode call (which exits early without registering commands) does NOT
-    // set the flag and block a subsequent full gateway initialization.
+    // Guard provider/config registration against repeated register() calls.
+    // OpenClaw calls register() twice: first with activate=false (discovery),
+    // then with activate=true (real activation). Provider and config setup
+    // should only run once, but commands must register every time so they
+    // enter the global pluginCommands Map on the activate=true call.
     const proc = process as NodeJS.Process & { __clawrouterRegistered?: boolean };
-    if (proc.__clawrouterRegistered) return;
+    const alreadyRegistered = !!proc.__clawrouterRegistered;
     proc.__clawrouterRegistered = true;
 
-    // Register BlockRun as a provider (sync — available immediately)
-    api.registerProvider(blockrunProvider);
+    if (!alreadyRegistered) {
+      // Register BlockRun as a provider (sync — available immediately)
+      api.registerProvider(blockrunProvider);
 
-    // Register native image and music generation providers so BlockRun models
-    // appear in OpenClaw's /imagine and music generation UIs.
-    api.registerImageGenerationProvider(buildImageGenerationProvider());
-    api.registerMusicGenerationProvider(buildMusicGenerationProvider());
+      // Register native image and music generation providers so BlockRun models
+      // appear in OpenClaw's /imagine and music generation UIs.
+      api.registerImageGenerationProvider(buildImageGenerationProvider());
+      api.registerMusicGenerationProvider(buildMusicGenerationProvider());
 
-    // Inject models config into OpenClaw config file
-    // This persists the config so models are recognized on restart
-    injectModelsConfig(api.logger);
+      // Inject models config into OpenClaw config file
+      // This persists the config so models are recognized on restart
+      injectModelsConfig(api.logger);
 
-    // Inject dummy auth profiles into agent auth stores
-    // OpenClaw's agent system looks for auth even if provider has auth: []
-    injectAuthProfile(api.logger);
+      // Inject dummy auth profiles into agent auth stores
+      // OpenClaw's agent system looks for auth even if provider has auth: []
+      injectAuthProfile(api.logger);
 
-    // Also set runtime config for immediate availability
-    const runtimePort = getProxyPort();
-    if (!api.config.models) {
-      api.config.models = { providers: {} };
-    }
-    if (!api.config.models.providers) {
-      api.config.models.providers = {};
-    }
-    api.config.models.providers.blockrun = {
-      baseUrl: `http://127.0.0.1:${runtimePort}/v1`,
-      api: "openai-completions",
-      // apiKey is required by pi-coding-agent's ModelRegistry for providers with models.
-      apiKey: "x402-proxy-handles-auth",
-      models: OPENCLAW_MODELS,
-    };
-
-    api.logger.info("BlockRun provider registered (55+ models via x402)");
-
-    // Register partner API tools (Twitter/X lookup, etc.)
-    try {
-      const proxyBaseUrl = `http://127.0.0.1:${runtimePort}`;
-      const partnerTools = buildPartnerTools(proxyBaseUrl);
-      for (const tool of partnerTools) {
-        api.registerTool(tool);
+      // Also set runtime config for immediate availability
+      const runtimePort = getProxyPort();
+      if (!api.config.models) {
+        api.config.models = { providers: {} };
       }
-      if (partnerTools.length > 0) {
-        api.logger.info(
-          `Registered ${partnerTools.length} partner tool(s): ${partnerTools.map((t) => t.name).join(", ")}`,
+      if (!api.config.models.providers) {
+        api.config.models.providers = {};
+      }
+      api.config.models.providers.blockrun = {
+        baseUrl: `http://127.0.0.1:${runtimePort}/v1`,
+        api: "openai-completions",
+        // apiKey is required by pi-coding-agent's ModelRegistry for providers with models.
+        apiKey: "x402-proxy-handles-auth",
+        models: OPENCLAW_MODELS,
+      };
+
+      api.logger.info("BlockRun provider registered (55+ models via x402)");
+
+      // Register partner API tools (Twitter/X lookup, etc.)
+      try {
+        const proxyBaseUrl = `http://127.0.0.1:${runtimePort}`;
+        const partnerTools = buildPartnerTools(proxyBaseUrl);
+        for (const tool of partnerTools) {
+          api.registerTool(tool);
+        }
+        if (partnerTools.length > 0) {
+          api.logger.info(
+            `Registered ${partnerTools.length} partner tool(s): ${partnerTools.map((t) => t.name).join(", ")}`,
+          );
+        }
+      } catch (err) {
+        api.logger.warn(
+          `Failed to register partner tools: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
-
-      // Register /partners command
-      api.registerCommand({
-        name: "partners",
-        description: "List available partner APIs and pricing",
-        acceptsArgs: false,
-        requireAuth: false,
-        handler: async () => {
-          if (PARTNER_SERVICES.length === 0) {
-            return { text: "No partner APIs available." };
-          }
-
-          const lines = ["**Partner APIs** (paid via your ClawRouter wallet)", ""];
-
-          for (const svc of PARTNER_SERVICES) {
-            lines.push(`**${svc.name}** (${svc.partner})`);
-            lines.push(`  ${svc.description}`);
-            lines.push(`  Tool: \`${`blockrun_${svc.id}`}\``);
-            lines.push(
-              `  Pricing: ${svc.pricing.perUnit} per ${svc.pricing.unit} (min ${svc.pricing.minimum}, max ${svc.pricing.maximum})`,
-            );
-            lines.push(
-              `  **How to use:** Ask "Look up Twitter user @elonmusk" or "Get info on these X accounts: @naval, @balajis"`,
-            );
-            lines.push("");
-          }
-
-          return { text: lines.join("\n") };
-        },
-      });
-    } catch (err) {
-      api.logger.warn(
-        `Failed to register partner tools: ${err instanceof Error ? err.message : String(err)}`,
-      );
     }
+
+    // Commands must register on every register() call — OpenClaw calls register()
+    // twice (activate=false then activate=true), and only the activate=true call
+    // writes commands into the global pluginCommands Map.
+    api.registerCommand({
+      name: "partners",
+      description: "List available partner APIs and pricing",
+      acceptsArgs: false,
+      requireAuth: false,
+      handler: async () => {
+        if (PARTNER_SERVICES.length === 0) {
+          return { text: "No partner APIs available." };
+        }
+
+        const lines = ["**Partner APIs** (paid via your ClawRouter wallet)", ""];
+
+        for (const svc of PARTNER_SERVICES) {
+          lines.push(`**${svc.name}** (${svc.partner})`);
+          lines.push(`  ${svc.description}`);
+          lines.push(`  Tool: \`${`blockrun_${svc.id}`}\``);
+          lines.push(
+            `  Pricing: ${svc.pricing.perUnit} per ${svc.pricing.unit} (min ${svc.pricing.minimum}, max ${svc.pricing.maximum})`,
+          );
+          lines.push(
+            `  **How to use:** Ask "Look up Twitter user @elonmusk" or "Get info on these X accounts: @naval, @balajis"`,
+          );
+          lines.push("");
+        }
+
+        return { text: lines.join("\n") };
+      },
+    });
 
     // Register commands synchronously so OpenClaw sees them during the register() call.
     // These factories are plain functions (no top-level await) — marking them async
@@ -1417,6 +1420,9 @@ const plugin: OpenClawPluginDefinition = {
     api.registerCommand(createStatsCommand());
     api.registerCommand(createExcludeCommand());
     api.logger.info("Commands registered: /wallet, /blockrun, /stats, /exclude");
+
+    // Everything below (service, proxy, wallet) should only run once
+    if (alreadyRegistered) return;
 
     // Register a service with stop() for cleanup on gateway shutdown
     // This prevents EADDRINUSE when the gateway restarts
@@ -1481,7 +1487,7 @@ const plugin: OpenClawPluginDefinition = {
       .then(async () => {
         // Proxy started successfully - verify health
         const port = getProxyPort();
-        const healthy = await waitForProxyHealth(port, 5000);
+        const healthy = await waitForProxyHealth(port, 15000);
         if (!healthy) {
           api.logger.warn(`Proxy health check timed out, commands may not work immediately`);
         }
