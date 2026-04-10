@@ -12,7 +12,13 @@ import { privateKeyToAccount } from "viem/accounts";
 import { wrapFetchWithPayment, x402Client } from "@x402/fetch";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import { toClientEvmSigner } from "@x402/evm";
-import { resolveOrGenerateWalletKey, resolvePaymentChain, WALLET_FILE } from "./auth.js";
+import { existsSync, readFileSync } from "node:fs";
+import {
+  resolveOrGenerateWalletKey,
+  resolvePaymentChain,
+  WALLET_FILE,
+  MNEMONIC_FILE,
+} from "./auth.js";
 import { BalanceMonitor } from "./balance.js";
 import { getSolanaAddress } from "./wallet.js";
 import { getStats } from "./stats.js";
@@ -402,9 +408,37 @@ async function analyzeWithAI(
     const evmSigner = toClientEvmSigner(account, publicClient);
     const x402 = new x402Client();
     registerExactEvmScheme(x402, { signer: evmSigner });
-    const paymentFetch = wrapFetchWithPayment(fetch, x402);
 
-    const response = await paymentFetch("https://blockrun.ai/api/v1/chat/completions", {
+    // Register Solana scheme if user is on Solana chain
+    const paymentChain = diagnostics.wallet.paymentChain;
+    if (paymentChain === "solana") {
+      try {
+        if (!existsSync(MNEMONIC_FILE)) {
+          throw new Error(`mnemonic file missing at ${MNEMONIC_FILE}`);
+        }
+        const mnemonic = readFileSync(MNEMONIC_FILE, "utf8").trim();
+        if (!mnemonic) throw new Error("mnemonic file empty");
+        const { deriveSolanaKeyBytes } = await import("./wallet.js");
+        const { registerExactSvmScheme } = await import("@x402/svm/exact/client");
+        const { createKeyPairSignerFromPrivateKeyBytes } = await import("@solana/kit");
+        const solanaKeyBytes = deriveSolanaKeyBytes(mnemonic);
+        const solanaSigner = await createKeyPairSignerFromPrivateKeyBytes(solanaKeyBytes);
+        registerExactSvmScheme(x402, { signer: solanaSigner });
+      } catch (err) {
+        console.log(
+          `  ⚠ Could not register Solana signer: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        console.log(`  ⚠ Falling back to Base (EVM) — doctor request may fail on Solana chain\n`);
+      }
+    }
+
+    const paymentFetch = wrapFetchWithPayment(fetch, x402);
+    const apiUrl =
+      paymentChain === "solana"
+        ? "https://sol.blockrun.ai/api/v1/chat/completions"
+        : "https://blockrun.ai/api/v1/chat/completions";
+
+    const response = await paymentFetch(apiUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
