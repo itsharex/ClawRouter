@@ -421,12 +421,16 @@ type RoutingConfig = {
     classifier: ClassifierConfig;
     scoring: ScoringConfig;
     tiers: Record<Tier, TierConfig>;
-    /** Tier configs for agentic mode - models that excel at multi-step tasks */
-    agenticTiers?: Record<Tier, TierConfig>;
-    /** Tier configs for eco profile - ultra cost-optimized (blockrun/eco) */
-    ecoTiers?: Record<Tier, TierConfig>;
-    /** Tier configs for premium profile - best quality (blockrun/premium) */
-    premiumTiers?: Record<Tier, TierConfig>;
+    /**
+     * Tier configs for agentic mode — models that excel at multi-step tasks.
+     * Set to `null` to disable agentic tier selection entirely (forces all
+     * requests through `tiers`, even when tools are present in the request).
+     */
+    agenticTiers?: Record<Tier, TierConfig> | null;
+    /** Tier configs for eco profile — ultra cost-optimized (blockrun/eco). `null` falls back to `tiers`. */
+    ecoTiers?: Record<Tier, TierConfig> | null;
+    /** Tier configs for premium profile — best quality (blockrun/premium). `null` falls back to `tiers`. */
+    premiumTiers?: Record<Tier, TierConfig> | null;
     /** Time-windowed promotions that temporarily override tier routing */
     promotions?: Promotion[];
     overrides: OverridesConfig;
@@ -699,6 +703,13 @@ type SessionEntry = {
     createdAt: number;
     lastUsedAt: number;
     requestCount: number;
+    /**
+     * `true` when the user explicitly chose this model (e.g. /model command in
+     * OpenClaw or sending an explicit non-profile model in the request body).
+     * Explicit pins are sticky — they're NOT overridden by tier escalation when
+     * a future routing-profile request comes in. The user's intent wins.
+     */
+    userExplicit?: boolean;
     recentHashes: string[];
     strikes: number;
     escalated: boolean;
@@ -727,8 +738,14 @@ declare class SessionStore {
     getSession(sessionId: string): SessionEntry | undefined;
     /**
      * Pin a model to a session.
+     *
+     * Pass `userExplicit: true` when the user explicitly chose this model
+     * (e.g. via /model command or by sending an explicit non-profile model).
+     * Explicit pins are sticky — they survive tier-escalation comparisons so
+     * that the user's choice keeps winning even if subsequent requests use a
+     * routing profile that would normally re-route.
      */
-    setSession(sessionId: string, model: string, tier: string): void;
+    setSession(sessionId: string, model: string, tier: string, userExplicit?: boolean): void;
     /**
      * Touch a session to extend its timeout.
      */

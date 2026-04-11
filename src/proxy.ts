@@ -4384,6 +4384,69 @@ async function proxyRequest(
         }
       }
 
+      // Explicit pins have no fallback chain (modelsToTry = [modelId]), so a
+      // single transient upstream 5xx (NVIDIA worker flake, blockrun 500)
+      // otherwise fails the whole request. Retry once with a short backoff.
+      // Non-retryable errors (auth/payment/config) fall through to the normal
+      // break path below.
+      const isExplicitPin = !routingDecision;
+      const isRetryableServerError =
+        result.errorCategory === "server_error" || result.errorCategory === "overloaded";
+      if (
+        isExplicitPin &&
+        isLastAttempt &&
+        isRetryableServerError &&
+        !globalController.signal.aborted
+      ) {
+        console.log(
+          `[ClawRouter] Explicit pin ${tryModel} got ${result.errorCategory} (HTTP ${result.errorStatus ?? "?"}), retrying once in 500ms`,
+        );
+        await new Promise<void>((resolve) => setTimeout(resolve, 500));
+        if (!globalController.signal.aborted) {
+          const retryController = new AbortController();
+          const retryTimeoutId = setTimeout(() => retryController.abort(), PER_MODEL_TIMEOUT_MS);
+          const retrySignal = AbortSignal.any([
+            globalController.signal,
+            retryController.signal,
+          ]);
+          const retryResult = await tryModelRequest(
+            upstreamUrl,
+            req.method ?? "POST",
+            headers,
+            body,
+            tryModel,
+            maxTokens,
+            payFetch,
+            balanceMonitor,
+            retrySignal,
+          );
+          clearTimeout(retryTimeoutId);
+          if (retryResult.success && retryResult.response) {
+            upstream = retryResult.response;
+            actualModelUsed = tryModel;
+            console.log(`[ClawRouter] Explicit-pin retry succeeded for: ${tryModel}`);
+            if (options.maxCostPerRunUsd && effectiveSessionId && !FREE_MODELS.has(tryModel)) {
+              const costEst = estimateAmount(tryModel, body.length, maxTokens);
+              if (costEst) {
+                sessionStore.addSessionCost(effectiveSessionId, BigInt(costEst));
+              }
+            }
+            break;
+          }
+          // Retry also failed — update lastError with the latest failure and
+          // fall through to the standard break path.
+          lastError = {
+            body: retryResult.errorBody || lastError?.body || "Unknown error",
+            status: retryResult.errorStatus || lastError?.status || 500,
+          };
+          failedAttempts.push({
+            model: tryModel,
+            reason: `${retryResult.errorCategory || `HTTP ${retryResult.errorStatus || 500}`} (retry)`,
+            status: retryResult.errorStatus || 500,
+          });
+        }
+      }
+
       // If it's a provider error and not the last attempt, try next model
       if (result.isProviderError && !isLastAttempt) {
         const isExplicitModelError = !routingDecision;

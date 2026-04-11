@@ -72306,20 +72306,27 @@ var RulesStrategy = class {
     let tierConfigs;
     let profileSuffix;
     let profile;
-    if (routingProfile === "eco" && config.ecoTiers) {
-      tierConfigs = config.ecoTiers;
-      profileSuffix = " | eco";
+    if (routingProfile === "eco") {
+      tierConfigs = config.ecoTiers ?? config.tiers;
+      profileSuffix = config.ecoTiers ? " | eco" : " | eco (default tiers)";
       profile = "eco";
-    } else if (routingProfile === "premium" && config.premiumTiers) {
-      tierConfigs = config.premiumTiers;
-      profileSuffix = " | premium";
+    } else if (routingProfile === "premium") {
+      tierConfigs = config.premiumTiers ?? config.tiers;
+      profileSuffix = config.premiumTiers ? " | premium" : " | premium (default tiers)";
       profile = "premium";
     } else {
       const agenticScore = ruleResult.agenticScore ?? 0;
       const isAutoAgentic = agenticScore >= 0.5;
-      const isExplicitAgentic = config.overrides.agenticMode ?? false;
+      const agenticModeSetting = config.overrides.agenticMode;
       const hasToolsInRequest = options.hasTools ?? false;
-      const useAgenticTiers = (hasToolsInRequest || isAutoAgentic || isExplicitAgentic) && config.agenticTiers != null;
+      let useAgenticTiers;
+      if (agenticModeSetting === false) {
+        useAgenticTiers = false;
+      } else if (agenticModeSetting === true) {
+        useAgenticTiers = config.agenticTiers != null;
+      } else {
+        useAgenticTiers = (hasToolsInRequest || isAutoAgentic) && config.agenticTiers != null;
+      }
       tierConfigs = useAgenticTiers ? config.agenticTiers : config.tiers;
       profileSuffix = useAgenticTiers ? ` | agentic${hasToolsInRequest ? " (tools)" : ""}` : "";
       profile = useAgenticTiers ? "agentic" : "auto";
@@ -73669,8 +73676,9 @@ var DEFAULT_ROUTING_CONFIG = {
   overrides: {
     maxTokensForceComplex: 1e5,
     structuredOutputMinTier: "MEDIUM",
-    ambiguousDefaultTier: "MEDIUM",
-    agenticMode: false
+    ambiguousDefaultTier: "MEDIUM"
+    // agenticMode left undefined → auto-detect via tools/agenticScore.
+    // Set to `true` to force agentic tiers; `false` to disable them entirely.
   }
 };
 
@@ -76041,8 +76049,14 @@ var SessionStore = class {
   }
   /**
    * Pin a model to a session.
+   *
+   * Pass `userExplicit: true` when the user explicitly chose this model
+   * (e.g. via /model command or by sending an explicit non-profile model).
+   * Explicit pins are sticky — they survive tier-escalation comparisons so
+   * that the user's choice keeps winning even if subsequent requests use a
+   * routing profile that would normally re-route.
    */
-  setSession(sessionId, model, tier) {
+  setSession(sessionId, model, tier, userExplicit) {
     if (!this.config.enabled || !sessionId) {
       return;
     }
@@ -76055,6 +76069,9 @@ var SessionStore = class {
         existing.model = model;
         existing.tier = tier;
       }
+      if (userExplicit) {
+        existing.userExplicit = true;
+      }
     } else {
       this.sessions.set(sessionId, {
         model,
@@ -76062,6 +76079,7 @@ var SessionStore = class {
         createdAt: now,
         lastUsedAt: now,
         requestCount: 1,
+        userExplicit: userExplicit || void 0,
         recentHashes: [],
         strikes: 0,
         escalated: false,
@@ -77124,13 +77142,51 @@ function buildProxyModelList(createdAt = Math.floor(Date.now() / 1e3)) {
 }
 function mergeRoutingConfig(overrides) {
   if (!overrides) return DEFAULT_ROUTING_CONFIG;
+  const mergeTiers = (defaults, user) => {
+    if (user === null) return null;
+    if (user === void 0) return defaults ?? null;
+    return { ...defaults ?? {}, ...user };
+  };
   return {
     ...DEFAULT_ROUTING_CONFIG,
     ...overrides,
     classifier: { ...DEFAULT_ROUTING_CONFIG.classifier, ...overrides.classifier },
     scoring: { ...DEFAULT_ROUTING_CONFIG.scoring, ...overrides.scoring },
-    tiers: { ...DEFAULT_ROUTING_CONFIG.tiers, ...overrides.tiers },
+    tiers: mergeTiers(DEFAULT_ROUTING_CONFIG.tiers, overrides.tiers) ?? DEFAULT_ROUTING_CONFIG.tiers,
+    agenticTiers: mergeTiers(DEFAULT_ROUTING_CONFIG.agenticTiers, overrides.agenticTiers),
+    ecoTiers: mergeTiers(DEFAULT_ROUTING_CONFIG.ecoTiers, overrides.ecoTiers),
+    premiumTiers: mergeTiers(DEFAULT_ROUTING_CONFIG.premiumTiers, overrides.premiumTiers),
     overrides: { ...DEFAULT_ROUTING_CONFIG.overrides, ...overrides.overrides }
+  };
+}
+function buildCostBreakdown(params) {
+  const { actualModelUsed, routingProfile, modelPricing, inputTokens, outputTokens, tier } = params;
+  if (typeof inputTokens !== "number" || typeof outputTokens !== "number" || inputTokens < 0 || outputTokens < 0) {
+    return void 0;
+  }
+  const pricing = modelPricing.get(actualModelUsed);
+  const inputPrice = pricing?.inputPrice ?? 0;
+  const outputPrice = pricing?.outputPrice ?? 0;
+  const input = inputTokens / 1e6 * inputPrice;
+  const output = outputTokens / 1e6 * outputPrice;
+  const costs = calculateModelCost(
+    actualModelUsed,
+    modelPricing,
+    inputTokens,
+    outputTokens,
+    routingProfile
+  );
+  const total = costs.costEstimate;
+  const baseline = costs.baselineCost;
+  const savingsPct = routingProfile === "premium" || baseline <= 0 ? void 0 : Math.max(0, Math.min(100, Math.round(costs.savings * 100)));
+  return {
+    total,
+    input,
+    output,
+    baseline,
+    ...savingsPct !== void 0 ? { savings_pct: savingsPct } : {},
+    model: actualModelUsed,
+    ...tier ? { tier } : {}
   };
 }
 function estimateAmount(modelId, bodyLength, maxTokens) {
@@ -78127,6 +78183,7 @@ async function proxyRequest(req, res, apiBase, payFetch, options, routerOpts, de
   let modelId = "";
   let maxTokens = 4096;
   let routingProfile = null;
+  let stickyExplicitModel;
   let balanceFallbackNotice;
   let budgetDowngradeNotice;
   let budgetDowngradeHeaderMode;
@@ -78682,6 +78739,13 @@ async function proxyRequest(req, res, apiBase, payFetch, options, routerOpts, de
           bodyModified = true;
         }
         modelId = resolvedModel;
+        const explicitPinSessionId = getSessionId(req.headers) ?? deriveSessionId(parsedMessages);
+        if (explicitPinSessionId) {
+          sessionStore.setSession(explicitPinSessionId, resolvedModel, "MEDIUM", true);
+          console.log(
+            `[ClawRouter] Session ${explicitPinSessionId.slice(0, 8)}... user-explicit pin set: ${resolvedModel}`
+          );
+        }
       }
       if (isRoutingProfile) {
         {
@@ -78716,39 +78780,10 @@ async function proxyRequest(req, res, apiBase, payFetch, options, routerOpts, de
             );
           }
           if (existingSession) {
-            const tierRank = {
-              SIMPLE: 0,
-              MEDIUM: 1,
-              COMPLEX: 2,
-              REASONING: 3
-            };
-            const existingRank = tierRank[existingSession.tier] ?? 0;
-            const newRank = tierRank[routingDecision.tier] ?? 0;
-            if (newRank > existingRank) {
+            if (existingSession.userExplicit) {
+              stickyExplicitModel = existingSession.model;
               console.log(
-                `[ClawRouter] Session ${effectiveSessionId?.slice(0, 8)}... upgrading: ${existingSession.tier} \u2192 ${routingDecision.tier} (${routingDecision.model})`
-              );
-              parsed.model = routingDecision.model;
-              modelId = routingDecision.model;
-              bodyModified = true;
-              if (effectiveSessionId) {
-                sessionStore.setSession(
-                  effectiveSessionId,
-                  routingDecision.model,
-                  routingDecision.tier
-                );
-              }
-            } else if (routingDecision.tier === "SIMPLE") {
-              console.log(
-                `[ClawRouter] Session ${effectiveSessionId?.slice(0, 8)}... SIMPLE follow-up, using cheap model: ${routingDecision.model} (bypassing pinned ${existingSession.tier})`
-              );
-              parsed.model = routingDecision.model;
-              modelId = routingDecision.model;
-              bodyModified = true;
-              sessionStore.touchSession(effectiveSessionId);
-            } else {
-              console.log(
-                `[ClawRouter] Session ${effectiveSessionId?.slice(0, 8)}... keeping pinned model: ${existingSession.model} (${existingSession.tier} >= ${routingDecision.tier})`
+                `[ClawRouter] Session ${effectiveSessionId?.slice(0, 8)}... user-explicit pin: ${existingSession.model} (overriding auto-routed ${routingDecision.tier} \u2192 ${routingDecision.model})`
               );
               parsed.model = existingSession.model;
               modelId = existingSession.model;
@@ -78759,29 +78794,77 @@ async function proxyRequest(req, res, apiBase, payFetch, options, routerOpts, de
                 model: existingSession.model,
                 tier: existingSession.tier
               };
-            }
-            const lastAssistantMsg = [...parsedMessages].reverse().find((m) => m.role === "assistant");
-            const assistantToolCalls = lastAssistantMsg?.tool_calls;
-            const toolCallNames = Array.isArray(assistantToolCalls) ? assistantToolCalls.map((tc) => tc.function?.name).filter((n) => Boolean(n)) : void 0;
-            const contentHash = hashRequestContent(prompt, toolCallNames);
-            const shouldEscalate = sessionStore.recordRequestHash(effectiveSessionId, contentHash);
-            if (shouldEscalate) {
-              const activeTierConfigs = routingDecision.tierConfigs ?? routerOpts.config.tiers;
-              const escalation = sessionStore.escalateSession(
-                effectiveSessionId,
-                activeTierConfigs
-              );
-              if (escalation) {
+            } else {
+              const tierRank = {
+                SIMPLE: 0,
+                MEDIUM: 1,
+                COMPLEX: 2,
+                REASONING: 3
+              };
+              const existingRank = tierRank[existingSession.tier] ?? 0;
+              const newRank = tierRank[routingDecision.tier] ?? 0;
+              if (newRank > existingRank) {
                 console.log(
-                  `[ClawRouter] \u26A1 3-strike escalation: ${existingSession.model} \u2192 ${escalation.model} (${existingSession.tier} \u2192 ${escalation.tier})`
+                  `[ClawRouter] Session ${effectiveSessionId?.slice(0, 8)}... upgrading: ${existingSession.tier} \u2192 ${routingDecision.tier} (${routingDecision.model})`
                 );
-                parsed.model = escalation.model;
-                modelId = escalation.model;
+                parsed.model = routingDecision.model;
+                modelId = routingDecision.model;
+                bodyModified = true;
+                if (effectiveSessionId) {
+                  sessionStore.setSession(
+                    effectiveSessionId,
+                    routingDecision.model,
+                    routingDecision.tier
+                  );
+                }
+              } else if (routingDecision.tier === "SIMPLE") {
+                console.log(
+                  `[ClawRouter] Session ${effectiveSessionId?.slice(0, 8)}... SIMPLE follow-up, using cheap model: ${routingDecision.model} (bypassing pinned ${existingSession.tier})`
+                );
+                parsed.model = routingDecision.model;
+                modelId = routingDecision.model;
+                bodyModified = true;
+                sessionStore.touchSession(effectiveSessionId);
+              } else {
+                console.log(
+                  `[ClawRouter] Session ${effectiveSessionId?.slice(0, 8)}... keeping pinned model: ${existingSession.model} (${existingSession.tier} >= ${routingDecision.tier})`
+                );
+                parsed.model = existingSession.model;
+                modelId = existingSession.model;
+                bodyModified = true;
+                sessionStore.touchSession(effectiveSessionId);
                 routingDecision = {
                   ...routingDecision,
-                  model: escalation.model,
-                  tier: escalation.tier
+                  model: existingSession.model,
+                  tier: existingSession.tier
                 };
+              }
+              const lastAssistantMsg = [...parsedMessages].reverse().find((m) => m.role === "assistant");
+              const assistantToolCalls = lastAssistantMsg?.tool_calls;
+              const toolCallNames = Array.isArray(assistantToolCalls) ? assistantToolCalls.map((tc) => tc.function?.name).filter((n) => Boolean(n)) : void 0;
+              const contentHash = hashRequestContent(prompt, toolCallNames);
+              const shouldEscalate = sessionStore.recordRequestHash(
+                effectiveSessionId,
+                contentHash
+              );
+              if (shouldEscalate) {
+                const activeTierConfigs = routingDecision.tierConfigs ?? routerOpts.config.tiers;
+                const escalation = sessionStore.escalateSession(
+                  effectiveSessionId,
+                  activeTierConfigs
+                );
+                if (escalation) {
+                  console.log(
+                    `[ClawRouter] \u26A1 3-strike escalation: ${existingSession.model} \u2192 ${escalation.model} (${existingSession.tier} \u2192 ${escalation.tier})`
+                  );
+                  parsed.model = escalation.model;
+                  modelId = escalation.model;
+                  routingDecision = {
+                    ...routingDecision,
+                    model: escalation.model,
+                    tier: escalation.tier
+                  };
+                }
               }
             }
           } else {
@@ -79089,15 +79172,23 @@ async function proxyRequest(req, res, apiBase, payFetch, options, routerOpts, de
         `[ClawRouter] Wallet empty \u2014 skipping routing chain, using free model: ${freeFallback}`
       );
     } else if (routingDecision) {
+      const prependStickyExplicitModel = (chain3) => {
+        if (!stickyExplicitModel) return chain3;
+        return [stickyExplicitModel, ...chain3.filter((model) => model !== stickyExplicitModel)];
+      };
       const estimatedInputTokens = Math.ceil(body.length / 4);
       const estimatedTotalTokens = estimatedInputTokens + maxTokens;
       const tierConfigs = routingDecision.tierConfigs ?? routerOpts.config.tiers;
-      const fullChain = getFallbackChain(routingDecision.tier, tierConfigs);
-      const contextFiltered = getFallbackChainFiltered(
-        routingDecision.tier,
-        tierConfigs,
-        estimatedTotalTokens,
-        getModelContextWindow
+      const fullChain = prependStickyExplicitModel(
+        getFallbackChain(routingDecision.tier, tierConfigs)
+      );
+      const contextFiltered = prependStickyExplicitModel(
+        getFallbackChainFiltered(
+          routingDecision.tier,
+          tierConfigs,
+          estimatedTotalTokens,
+          getModelContextWindow
+        )
       );
       const contextExcluded = fullChain.filter((m) => !contextFiltered.includes(m));
       if (contextExcluded.length > 0) {
@@ -79105,14 +79196,18 @@ async function proxyRequest(req, res, apiBase, payFetch, options, routerOpts, de
           `[ClawRouter] Context filter (~${estimatedTotalTokens} tokens): excluded ${contextExcluded.join(", ")}`
         );
       }
-      const excludeFiltered = filterByExcludeList(contextFiltered, excludeList);
+      const excludeFiltered = prependStickyExplicitModel(
+        filterByExcludeList(contextFiltered, excludeList)
+      );
       const excludeExcluded = contextFiltered.filter((m) => !excludeFiltered.includes(m));
       if (excludeExcluded.length > 0) {
         console.log(
           `[ClawRouter] Exclude filter: excluded ${excludeExcluded.join(", ")} (user preference)`
         );
       }
-      let toolFiltered = filterByToolCalling(excludeFiltered, hasTools, supportsToolCalling);
+      let toolFiltered = prependStickyExplicitModel(
+        filterByToolCalling(excludeFiltered, hasTools, supportsToolCalling)
+      );
       const toolExcluded = excludeFiltered.filter((m) => !toolFiltered.includes(m));
       if (toolExcluded.length > 0) {
         console.log(
@@ -79131,17 +79226,19 @@ async function proxyRequest(req, res, apiBase, payFetch, options, routerOpts, de
           console.log(
             `[ClawRouter] Tool-compliance filter: excluded ${dropped.join(", ")} (unreliable tool schema handling)`
           );
-          toolFiltered = compliant;
+          toolFiltered = prependStickyExplicitModel(compliant);
         }
       }
-      const visionFiltered = filterByVision(toolFiltered, hasVision, supportsVision);
+      const visionFiltered = prependStickyExplicitModel(
+        filterByVision(toolFiltered, hasVision, supportsVision)
+      );
       const visionExcluded = toolFiltered.filter((m) => !visionFiltered.includes(m));
       if (visionExcluded.length > 0) {
         console.log(
           `[ClawRouter] Vision filter: excluded ${visionExcluded.join(", ")} (no vision support)`
         );
       }
-      modelsToTry = visionFiltered.slice(0, MAX_FALLBACK_ATTEMPTS);
+      modelsToTry = prependStickyExplicitModel(visionFiltered).slice(0, MAX_FALLBACK_ATTEMPTS);
       modelsToTry = prioritizeNonRateLimited(modelsToTry);
     } else {
       modelsToTry = modelId ? [modelId] : [];
@@ -79298,6 +79395,55 @@ data: [DONE]
           }
         }
       }
+      const isExplicitPin = !routingDecision;
+      const isRetryableServerError = result.errorCategory === "server_error" || result.errorCategory === "overloaded";
+      if (isExplicitPin && isLastAttempt && isRetryableServerError && !globalController.signal.aborted) {
+        console.log(
+          `[ClawRouter] Explicit pin ${tryModel} got ${result.errorCategory} (HTTP ${result.errorStatus ?? "?"}), retrying once in 500ms`
+        );
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        if (!globalController.signal.aborted) {
+          const retryController = new AbortController();
+          const retryTimeoutId = setTimeout(() => retryController.abort(), PER_MODEL_TIMEOUT_MS);
+          const retrySignal = AbortSignal.any([
+            globalController.signal,
+            retryController.signal
+          ]);
+          const retryResult = await tryModelRequest(
+            upstreamUrl,
+            req.method ?? "POST",
+            headers,
+            body,
+            tryModel,
+            maxTokens,
+            payFetch,
+            balanceMonitor,
+            retrySignal
+          );
+          clearTimeout(retryTimeoutId);
+          if (retryResult.success && retryResult.response) {
+            upstream = retryResult.response;
+            actualModelUsed = tryModel;
+            console.log(`[ClawRouter] Explicit-pin retry succeeded for: ${tryModel}`);
+            if (options.maxCostPerRunUsd && effectiveSessionId && !FREE_MODELS.has(tryModel)) {
+              const costEst = estimateAmount(tryModel, body.length, maxTokens);
+              if (costEst) {
+                sessionStore.addSessionCost(effectiveSessionId, BigInt(costEst));
+              }
+            }
+            break;
+          }
+          lastError = {
+            body: retryResult.errorBody || lastError?.body || "Unknown error",
+            status: retryResult.errorStatus || lastError?.status || 500
+          };
+          failedAttempts.push({
+            model: tryModel,
+            reason: `${retryResult.errorCategory || `HTTP ${retryResult.errorStatus || 500}`} (retry)`,
+            status: retryResult.errorStatus || 500
+          });
+        }
+      }
       if (result.isProviderError && !isLastAttempt) {
         const isExplicitModelError = !routingDecision;
         const isUnknownExplicitModel = isExplicitModelError && /unknown.*model|invalid.*model/i.test(result.errorBody || "");
@@ -79418,10 +79564,17 @@ data: [DONE]
       };
       options.onRouted?.(routingDecision);
       if (effectiveSessionId) {
-        sessionStore.setSession(effectiveSessionId, actualModelUsed, routingDecision.tier);
-        console.log(
-          `[ClawRouter] Session ${effectiveSessionId.slice(0, 8)}... updated pin to fallback: ${actualModelUsed}`
-        );
+        const pinnedSession = sessionStore.getSession(effectiveSessionId);
+        if (pinnedSession?.userExplicit) {
+          console.log(
+            `[ClawRouter] Session ${effectiveSessionId.slice(0, 8)}... fallback used ${actualModelUsed}, preserving user-explicit pin: ${pinnedSession.model}`
+          );
+        } else {
+          sessionStore.setSession(effectiveSessionId, actualModelUsed, routingDecision.tier);
+          console.log(
+            `[ClawRouter] Session ${effectiveSessionId.slice(0, 8)}... updated pin to fallback: ${actualModelUsed}`
+          );
+        }
       }
     }
     if (!upstream) {
@@ -79630,6 +79783,39 @@ data: [DONE]
           responseChunks.push(Buffer.from(sseData));
         }
       }
+      if (typeof responseInputTokens === "number" && typeof responseOutputTokens === "number") {
+        const usagePayload = {
+          prompt_tokens: responseInputTokens,
+          completion_tokens: responseOutputTokens,
+          total_tokens: responseInputTokens + responseOutputTokens
+        };
+        const costBreakdown = buildCostBreakdown({
+          actualModelUsed,
+          routingProfile: routingProfile ?? void 0,
+          routingDecision,
+          modelPricing: routerOpts.modelPricing,
+          inputTokens: responseInputTokens,
+          outputTokens: responseOutputTokens,
+          tier: routingDecision?.tier
+        });
+        if (costBreakdown) {
+          usagePayload.cost = costBreakdown;
+        }
+        const usageChunk = {
+          id: `chatcmpl-${Date.now()}`,
+          object: "chat.completion.chunk",
+          created: Math.floor(Date.now() / 1e3),
+          model: actualModelUsed || "unknown",
+          system_fingerprint: null,
+          choices: [],
+          usage: usagePayload
+        };
+        const usageData = `data: ${JSON.stringify(usageChunk)}
+
+`;
+        safeWrite(res, usageData);
+        responseChunks.push(Buffer.from(usageData));
+      }
       if (routingDecision) {
         const costComment = `: cost=$${routingDecision.costEstimate.toFixed(4)} savings=${(routingDecision.savings * 100).toFixed(0)}% model=${actualModelUsed} tier=${routingDecision.tier}
 
@@ -79715,10 +79901,23 @@ data: [DONE]
       if (actualModelUsed && responseBody.length > 0) {
         try {
           const parsed = JSON.parse(responseBody.toString());
-          if (parsed.model !== void 0) {
-            parsed.model = actualModelUsed;
-            responseBody = Buffer.from(JSON.stringify(parsed));
+          parsed.model = actualModelUsed;
+          const costBreakdown = buildCostBreakdown({
+            actualModelUsed,
+            routingProfile: routingProfile ?? void 0,
+            routingDecision,
+            modelPricing: routerOpts.modelPricing,
+            inputTokens: responseInputTokens,
+            outputTokens: responseOutputTokens,
+            tier: routingDecision?.tier
+          });
+          if (costBreakdown) {
+            if (!parsed.usage || typeof parsed.usage !== "object") {
+              parsed.usage = {};
+            }
+            parsed.usage.cost = costBreakdown;
           }
+          responseBody = Buffer.from(JSON.stringify(parsed));
         } catch {
         }
       }
