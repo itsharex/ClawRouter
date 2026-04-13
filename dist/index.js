@@ -79171,7 +79171,7 @@ async function proxyRequest(req, res, apiBase, payFetch, options, routerOpts, de
     } else {
       modelsToTry = modelId ? [modelId] : [];
     }
-    if (!hasTools) {
+    if (!hasTools && routingDecision) {
       const freeFallback = pickFreeModel(excludeList);
       if (freeFallback && !modelsToTry.includes(freeFallback)) {
         modelsToTry.push(freeFallback);
@@ -81453,16 +81453,19 @@ function injectAuthProfile(logger) {
   }
 }
 var activeProxyHandle = null;
+var pendingConfiguredStartupApi = null;
 function clearDeferredProxyStartTimer(proc = process) {
   if (!proc.__clawrouterDeferredStartTimer) return false;
   clearTimeout(proc.__clawrouterDeferredStartTimer);
   proc.__clawrouterDeferredStartTimer = void 0;
   return true;
 }
-function beginProxyStartupAttempt(proc = process) {
+function beginProxyStartupAttempt(proc = process, startedWithEmptyConfig = false) {
   const generation = (proc.__clawrouterStartupGeneration ?? 0) + 1;
   proc.__clawrouterStartupGeneration = generation;
   proc.__clawrouterProxyStarted = true;
+  proc.__clawrouterStartedWithEmptyConfig = startedWithEmptyConfig;
+  proc.__clawrouterStartupPhase = "probing";
   return generation;
 }
 function isProxyStartupCurrent(generation, proc = process) {
@@ -81471,11 +81474,63 @@ function isProxyStartupCurrent(generation, proc = process) {
 function resetProxyStartupState() {
   const proc = process;
   clearDeferredProxyStartTimer(proc);
+  pendingConfiguredStartupApi = null;
   proc.__clawrouterStartupGeneration = (proc.__clawrouterStartupGeneration ?? 0) + 1;
   proc.__clawrouterProxyStarted = false;
+  proc.__clawrouterStartedWithEmptyConfig = false;
+  proc.__clawrouterStartupPhase = "idle";
   setActiveProxy(null);
 }
+function startPendingConfiguredProxyIfQueued(proc = process) {
+  if (!pendingConfiguredStartupApi) return false;
+  if (proc.__clawrouterProxyStarted || activeProxyHandle) {
+    pendingConfiguredStartupApi = null;
+    return false;
+  }
+  const api = pendingConfiguredStartupApi;
+  pendingConfiguredStartupApi = null;
+  const generation = beginProxyStartupAttempt(proc, false);
+  api.logger.info("Starting proxy with populated pluginConfig");
+  startProxyAfterPortProbe(api, generation);
+  return true;
+}
+function resumePendingConfiguredProxyAfterStaleFailure(proc = process) {
+  if (!pendingConfiguredStartupApi) return false;
+  if (proc.__clawrouterProxyStarted || activeProxyHandle) return false;
+  proc.__clawrouterStartupPhase = "idle";
+  return startPendingConfiguredProxyIfQueued(proc);
+}
+function supersedeEmptyConfigStartup(api) {
+  const proc = process;
+  pendingConfiguredStartupApi = api;
+  proc.__clawrouterStartupGeneration = (proc.__clawrouterStartupGeneration ?? 0) + 1;
+  proc.__clawrouterProxyStarted = false;
+  proc.__clawrouterStartedWithEmptyConfig = false;
+  if (activeProxyHandle) {
+    const oldHandle = activeProxyHandle;
+    activeProxyHandle = null;
+    setActiveProxy(null);
+    proc.__clawrouterStartupPhase = "idle";
+    void oldHandle.close().catch(() => {
+    }).finally(() => {
+      startPendingConfiguredProxyIfQueued(proc);
+    });
+    return;
+  }
+  if (proc.__clawrouterStartupPhase === "starting") {
+    api.logger.info(
+      "Populated pluginConfig arrived during provisional startup \u2014 queued restart with current config"
+    );
+    return;
+  }
+  proc.__clawrouterStartupPhase = "idle";
+  startPendingConfiguredProxyIfQueued(proc);
+}
 async function startProxyInBackground(api, startupGeneration) {
+  const proc = process;
+  if (startupGeneration !== void 0 && isProxyStartupCurrent(startupGeneration, proc)) {
+    proc.__clawrouterStartupPhase = "starting";
+  }
   const configKey = api.pluginConfig?.walletKey;
   let wallet;
   if (typeof configKey === "string" && /^0x[0-9a-fA-F]{64}$/.test(configKey)) {
@@ -81543,10 +81598,13 @@ async function startProxyInBackground(api, startupGeneration) {
       await proxy.close();
     } catch {
     }
+    proc.__clawrouterStartupPhase = "idle";
+    startPendingConfiguredProxyIfQueued(proc);
     return false;
   }
   setActiveProxy(proxy);
   activeProxyHandle = proxy;
+  proc.__clawrouterStartupPhase = "running";
   const startupExclusions = loadExcludeList();
   if (startupExclusions.size > 0) {
     api.logger.info(
@@ -81627,6 +81685,8 @@ function startProxyAfterPortProbe(api, startupGeneration) {
   }).catch((err) => {
     if (isProxyStartupCurrent(startupGeneration)) {
       resetProxyStartupState();
+    } else {
+      resumePendingConfiguredProxyAfterStaleFailure();
     }
     api.logger.error(
       `Failed to start BlockRun proxy: ${err instanceof Error ? err.message : String(err)}`
@@ -82085,16 +82145,22 @@ var plugin = {
       api.config,
       blockrunMcpServer.definition
     );
-    api.logger.info("BlockRun provider registered (55+ models via x402)");
-    if (typeof api.registerWebSearchProvider === "function") {
-      api.logger.info(`Registered BlockRun web_search provider (${BLOCKRUN_EXA_PROVIDER_ID})`);
-    }
-    if (runtimeMcpResult.status === "added" || runtimeMcpResult.status === "updated") {
-      api.logger.info(
-        blockrunMcpServer.source === "local" ? `Configured BlockRun MCP server (${BLOCKRUN_MCP_SERVER_NAME}) from local blockrun-mcp build` : `Configured BlockRun MCP server (${BLOCKRUN_MCP_SERVER_NAME}) via npx @blockrun/mcp@latest`
-      );
-    } else if (runtimeMcpResult.status === "preserved") {
-      api.logger.info(`Preserved custom BlockRun MCP server config (${BLOCKRUN_MCP_SERVER_NAME})`);
+    const shouldLogRegistration = !proc.__clawrouterRegistrationLogged;
+    proc.__clawrouterRegistrationLogged = true;
+    if (shouldLogRegistration) {
+      api.logger.info("BlockRun provider registered (55+ models via x402)");
+      if (typeof api.registerWebSearchProvider === "function") {
+        api.logger.info(`Registered BlockRun web_search provider (${BLOCKRUN_EXA_PROVIDER_ID})`);
+      }
+      if (runtimeMcpResult.status === "added" || runtimeMcpResult.status === "updated") {
+        api.logger.info(
+          blockrunMcpServer.source === "local" ? `Configured BlockRun MCP server (${BLOCKRUN_MCP_SERVER_NAME}) from local blockrun-mcp build` : `Configured BlockRun MCP server (${BLOCKRUN_MCP_SERVER_NAME}) via npx @blockrun/mcp@latest`
+        );
+      } else if (runtimeMcpResult.status === "preserved") {
+        api.logger.info(
+          `Preserved custom BlockRun MCP server config (${BLOCKRUN_MCP_SERVER_NAME})`
+        );
+      }
     }
     try {
       const proxyBaseUrl = `http://127.0.0.1:${runtimePort}`;
@@ -82102,7 +82168,7 @@ var plugin = {
       for (const tool of partnerTools) {
         api.registerTool(tool);
       }
-      if (partnerTools.length > 0) {
+      if (partnerTools.length > 0 && shouldLogRegistration) {
         api.logger.info(
           `Registered ${partnerTools.length} partner tool(s): ${partnerTools.map((t) => t.name).join(", ")}`
         );
@@ -82146,7 +82212,9 @@ var plugin = {
     }
     api.registerCommand(createStatsCommand());
     api.registerCommand(createExcludeCommand());
-    api.logger.info("Commands registered: /wallet, /blockrun, /stats, /exclude");
+    if (shouldLogRegistration) {
+      api.logger.info("Commands registered: /wallet, /blockrun, /stats, /exclude");
+    }
     api.registerService({
       id: "clawrouter-proxy",
       start: () => {
@@ -82167,51 +82235,66 @@ var plugin = {
       }
     });
     if (!isGatewayMode()) {
-      resolveOrGenerateWalletKey().then(({ address: address2, source }) => {
-        if (source === "generated") {
-          api.logger.warn(`\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550`);
-          api.logger.warn(`  NEW WALLET GENERATED \u2014 BACK UP YOUR KEY NOW!`);
-          api.logger.warn(`  Address : ${address2}`);
-          api.logger.warn(`  Run /wallet export to get your private key`);
-          api.logger.warn(`  Losing this key = losing your USDC funds`);
-          api.logger.warn(`\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550`);
-        } else if (source === "saved") {
-          api.logger.info(`Using saved wallet: ${address2}`);
-        } else if (source === "config") {
-          api.logger.info(`Using wallet from plugin config: ${address2}`);
-        } else {
-          api.logger.info(`Using wallet from BLOCKRUN_WALLET_KEY: ${address2}`);
-        }
-      }).catch((err) => {
-        api.logger.warn(
-          `Failed to initialize wallet: ${err instanceof Error ? err.message : String(err)}`
-        );
-      });
-      api.logger.info("Not in gateway mode \u2014 proxy will start when gateway runs");
+      if (shouldLogRegistration) {
+        resolveOrGenerateWalletKey().then(({ address: address2, source }) => {
+          if (source === "generated") {
+            api.logger.warn(`\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550`);
+            api.logger.warn(`  NEW WALLET GENERATED \u2014 BACK UP YOUR KEY NOW!`);
+            api.logger.warn(`  Address : ${address2}`);
+            api.logger.warn(`  Run /wallet export to get your private key`);
+            api.logger.warn(`  Losing this key = losing your USDC funds`);
+            api.logger.warn(`\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550`);
+          } else if (source === "saved") {
+            api.logger.info(`Using saved wallet: ${address2}`);
+          } else if (source === "config") {
+            api.logger.info(`Using wallet from plugin config: ${address2}`);
+          } else {
+            api.logger.info(`Using wallet from BLOCKRUN_WALLET_KEY: ${address2}`);
+          }
+        }).catch((err) => {
+          api.logger.warn(
+            `Failed to initialize wallet: ${err instanceof Error ? err.message : String(err)}`
+          );
+        });
+        api.logger.info("Not in gateway mode \u2014 proxy will start when gateway runs");
+      }
       return;
     }
     const pluginConfigEmpty = !api.pluginConfig || typeof api.pluginConfig !== "object" || Object.keys(api.pluginConfig).length === 0;
-    if (proxyAlreadyStarted) {
-      api.logger.info("Proxy already started by earlier register() call \u2014 skipping");
-      return;
-    }
     if (clearDeferredProxyStartTimer(proc)) {
       api.logger.info("Superseding earlier deferred proxy start \u2014 using current pluginConfig");
     }
+    if (proxyAlreadyStarted) {
+      if (!pluginConfigEmpty && proc.__clawrouterStartedWithEmptyConfig) {
+        api.logger.info(
+          "Populated pluginConfig arrived after provisional default startup \u2014 switching proxy to current config"
+        );
+        supersedeEmptyConfigStartup(api);
+      } else if (shouldLogRegistration) {
+        api.logger.info("Proxy already started by earlier register() call \u2014 skipping");
+      }
+      return;
+    }
     if (pluginConfigEmpty) {
-      api.logger.info(
-        "pluginConfig empty \u2014 deferring proxy startup 250ms in case a populated config arrives"
-      );
+      if (shouldLogRegistration) {
+        api.logger.info(
+          "pluginConfig empty \u2014 deferring proxy startup 250ms in case a populated config arrives"
+        );
+      }
       proc.__clawrouterDeferredStartTimer = setTimeout(() => {
         proc.__clawrouterDeferredStartTimer = void 0;
         if (proc.__clawrouterProxyStarted) return;
-        const startupGeneration2 = beginProxyStartupAttempt(proc);
+        const startupGeneration2 = beginProxyStartupAttempt(proc, true);
         api.logger.info("Deferred timer fired \u2014 starting proxy with default config");
         startProxyAfterPortProbe(api, startupGeneration2);
       }, 250);
       return;
     }
-    const startupGeneration = beginProxyStartupAttempt(proc);
+    if (pendingConfiguredStartupApi) {
+      pendingConfiguredStartupApi = null;
+      api.logger.info("Discarding older queued populated pluginConfig \u2014 using newest config");
+    }
+    const startupGeneration = beginProxyStartupAttempt(proc, false);
     startProxyAfterPortProbe(api, startupGeneration);
   },
   /**

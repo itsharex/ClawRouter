@@ -79243,7 +79243,7 @@ async function proxyRequest(req, res, apiBase, payFetch, options, routerOpts, de
     } else {
       modelsToTry = modelId ? [modelId] : [];
     }
-    if (!hasTools) {
+    if (!hasTools && routingDecision) {
       const freeFallback = pickFreeModel(excludeList);
       if (freeFallback && !modelsToTry.includes(freeFallback)) {
         modelsToTry.push(freeFallback);

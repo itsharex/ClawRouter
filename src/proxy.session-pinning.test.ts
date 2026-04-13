@@ -278,6 +278,60 @@ describe("proxy session pinning", () => {
     expect(attempts).toBe(2);
   });
 
+  it("retries an explicit-pin model once on transient 5xx errors for normal chats", async () => {
+    const receivedModels: string[] = [];
+    let attempts = 0;
+
+    const upstreamSetup = await createUpstream((body, _req, res) => {
+      const model = String(body.model ?? "");
+      receivedModels.push(model);
+      attempts++;
+
+      if (attempts === 1) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: { message: "upstream provider 500" } }));
+        return;
+      }
+
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          id: `chatcmpl-${attempts}`,
+          object: "chat.completion",
+          created: Math.floor(Date.now() / 1_000),
+          model,
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant", content: `ok:${model}` },
+              finish_reason: "stop",
+            },
+          ],
+          usage: { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 },
+        }),
+      );
+    });
+    upstream = upstreamSetup.server;
+
+    proxy = await startProxy({
+      wallet: generatePrivateKey(),
+      apiBase: upstreamSetup.url,
+      port: 0,
+      skipBalanceCheck: true,
+      cacheConfig: { enabled: false },
+      routingConfig: createRoutingConfig(),
+    });
+
+    const res = await postChat(proxy, "retry-5xx-normal-chat", EXPLICIT_MODEL, "hi");
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { choices: Array<{ message: { content: string } }> };
+    expect(json.choices[0]?.message.content).toBe(`ok:${EXPLICIT_MODEL}`);
+
+    // Normal explicit chats should retry the chosen model, not silently drop to free/*
+    expect(receivedModels).toEqual([EXPLICIT_MODEL, EXPLICIT_MODEL]);
+    expect(attempts).toBe(2);
+  });
+
   it("does not retry an explicit-pin model on 4xx auth errors", async () => {
     const receivedModels: string[] = [];
 

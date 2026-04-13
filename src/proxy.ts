@@ -4173,11 +4173,10 @@ async function proxyRequest(
       modelsToTry = modelId ? [modelId] : [];
     }
 
-    // Ensure a free model is the last-resort fallback for non-tool requests.
-    // Skip free fallback when tools are present — free models lack tool calling
-    // support and would produce broken responses for agentic tasks.
-    // Picks the best available free model that isn't excluded by the user.
-    if (!hasTools) {
+    // Ensure routed requests have a free-model last resort for non-tool chats.
+    // Explicit model requests intentionally skip this: silently substituting a
+    // user-chosen model with `free/*` is deceptive.
+    if (!hasTools && routingDecision) {
       const freeFallback = pickFreeModel(excludeList);
       if (freeFallback && !modelsToTry.includes(freeFallback)) {
         modelsToTry.push(freeFallback);
@@ -4384,11 +4383,10 @@ async function proxyRequest(
         }
       }
 
-      // Explicit pins have no fallback chain (modelsToTry = [modelId]), so a
+      // Explicit pins intentionally avoid automatic free-model fallback, so a
       // single transient upstream 5xx (NVIDIA worker flake, blockrun 500)
-      // otherwise fails the whole request. Retry once with a short backoff.
-      // Non-retryable errors (auth/payment/config) fall through to the normal
-      // break path below.
+      // would otherwise fail the whole request. Retry once with a short
+      // backoff. Non-retryable errors (auth/payment/config) fall through.
       const isExplicitPin = !routingDecision;
       const isRetryableServerError =
         result.errorCategory === "server_error" || result.errorCategory === "overloaded";

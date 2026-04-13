@@ -1635,31 +1635,33 @@ const plugin: OpenClawPluginDefinition = {
     // The proxy keeps the Node.js event loop alive, preventing CLI commands from exiting
     // The proxy will start automatically when the gateway runs
     if (!isGatewayMode()) {
-      // Generate wallet on first install (even outside gateway mode)
-      // This ensures users can see their wallet address immediately after install
-      resolveOrGenerateWalletKey()
-        .then(({ address, source }) => {
-          if (source === "generated") {
-            api.logger.warn(`════════════════════════════════════════════════`);
-            api.logger.warn(`  NEW WALLET GENERATED — BACK UP YOUR KEY NOW!`);
-            api.logger.warn(`  Address : ${address}`);
-            api.logger.warn(`  Run /wallet export to get your private key`);
-            api.logger.warn(`  Losing this key = losing your USDC funds`);
-            api.logger.warn(`════════════════════════════════════════════════`);
-          } else if (source === "saved") {
-            api.logger.info(`Using saved wallet: ${address}`);
-          } else if (source === "config") {
-            api.logger.info(`Using wallet from plugin config: ${address}`);
-          } else {
-            api.logger.info(`Using wallet from BLOCKRUN_WALLET_KEY: ${address}`);
-          }
-        })
-        .catch((err) => {
-          api.logger.warn(
-            `Failed to initialize wallet: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        });
-      api.logger.info("Not in gateway mode — proxy will start when gateway runs");
+      if (shouldLogRegistration) {
+        // Generate wallet on first install (even outside gateway mode)
+        // This ensures users can see their wallet address immediately after install
+        resolveOrGenerateWalletKey()
+          .then(({ address, source }) => {
+            if (source === "generated") {
+              api.logger.warn(`════════════════════════════════════════════════`);
+              api.logger.warn(`  NEW WALLET GENERATED — BACK UP YOUR KEY NOW!`);
+              api.logger.warn(`  Address : ${address}`);
+              api.logger.warn(`  Run /wallet export to get your private key`);
+              api.logger.warn(`  Losing this key = losing your USDC funds`);
+              api.logger.warn(`════════════════════════════════════════════════`);
+            } else if (source === "saved") {
+              api.logger.info(`Using saved wallet: ${address}`);
+            } else if (source === "config") {
+              api.logger.info(`Using wallet from plugin config: ${address}`);
+            } else {
+              api.logger.info(`Using wallet from BLOCKRUN_WALLET_KEY: ${address}`);
+            }
+          })
+          .catch((err) => {
+            api.logger.warn(
+              `Failed to initialize wallet: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          });
+        api.logger.info("Not in gateway mode — proxy will start when gateway runs");
+      }
       return;
     }
 
@@ -1704,7 +1706,7 @@ const plugin: OpenClawPluginDefinition = {
           "Populated pluginConfig arrived after provisional default startup — switching proxy to current config",
         );
         supersedeEmptyConfigStartup(api);
-      } else {
+      } else if (shouldLogRegistration) {
         api.logger.info("Proxy already started by earlier register() call — skipping");
       }
       return;
@@ -1713,9 +1715,11 @@ const plugin: OpenClawPluginDefinition = {
     if (pluginConfigEmpty) {
       // Defer 250ms so OpenClaw's second register() call (with populated
       // pluginConfig) has a chance to supersede this one.
-      api.logger.info(
-        "pluginConfig empty — deferring proxy startup 250ms in case a populated config arrives",
-      );
+      if (shouldLogRegistration) {
+        api.logger.info(
+          "pluginConfig empty — deferring proxy startup 250ms in case a populated config arrives",
+        );
+      }
       proc.__clawrouterDeferredStartTimer = setTimeout(() => {
         proc.__clawrouterDeferredStartTimer = undefined;
         if (proc.__clawrouterProxyStarted) return;
